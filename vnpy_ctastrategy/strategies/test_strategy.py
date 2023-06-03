@@ -1,3 +1,5 @@
+from threading import Timer
+
 from vnpy_ctastrategy import (
     CtaTemplate,
     StopOrder,
@@ -7,7 +9,7 @@ from vnpy_ctastrategy import (
     OrderData
 )
 
-from time import time
+from vnpy.trader.utility import BarGenerator, ArrayManager
 
 
 class TestStrategy(CtaTemplate):
@@ -20,11 +22,22 @@ class TestStrategy(CtaTemplate):
     test_all_done = False
 
     parameters = ["test_trigger"]
-    variables = ["tick_count", "test_all_done"]
+    variables = {"tick_count": 'tick_count',
+                 "test_all_done": 'tick_count',
+                 "macd": 'macd',
+                 "rsi": 'rsi'
+                 }
 
     def __init__(self, cta_engine, strategy_name, vt_symbol, setting):
         """"""
         super().__init__(cta_engine, strategy_name, vt_symbol, setting)
+
+        self.bg = BarGenerator(self.on_bar, 15, self.on_x_min_bar)
+        self.am = ArrayManager(900)
+
+        self.last_bar: BarData = None
+        self.macd = 0
+        self.rsi = 0
 
         self.test_funcs = [
             self.test_market_order,
@@ -32,12 +45,13 @@ class TestStrategy(CtaTemplate):
             self.test_cancel_all,
             self.test_stop_order
         ]
-        self.last_tick = None
+        self.last_tick: TickData = None
 
     def on_init(self):
         """
         Callback when strategy is inited.
         """
+        self.load_bar(11)
         self.write_log("策略初始化")
 
     def on_start(self):
@@ -56,25 +70,26 @@ class TestStrategy(CtaTemplate):
         """
         Callback of new tick data update.
         """
-        if self.test_all_done:
-            return
-
-        self.last_tick = tick
-
-        self.tick_count += 1
-        if self.tick_count >= self.test_trigger:
-            self.tick_count = 0
-
-            if self.test_funcs:
-                test_func = self.test_funcs.pop(0)
-
-                start = time()
-                test_func()
-                time_cost = (time() - start) * 1000
-                self.write_log("耗时%s毫秒" % (time_cost))
-            else:
-                self.write_log("测试已全部完成")
-                self.test_all_done = True
+        # self.bg.update_tick(tick)
+        # if self.test_all_done:
+        #     return
+        #
+        # self.last_tick = tick
+        #
+        # self.tick_count += 1
+        # if self.tick_count >= self.test_trigger:
+        #     self.tick_count = 0
+        #
+        #     if self.test_funcs:
+        #         test_func = self.test_funcs.pop(0)
+        #
+        #         start = time()
+        #         test_func()
+        #         time_cost = (time() - start) * 1000
+        #         self.write_log("耗时%s毫秒" % (time_cost))
+        #     else:
+        #         self.write_log("测试已全部完成")
+        #         self.test_all_done = True
 
         self.put_event()
 
@@ -82,7 +97,27 @@ class TestStrategy(CtaTemplate):
         """
         Callback of new bar data update.
         """
-        pass
+        self.bg.update_bar(bar)
+
+        if self.inited:
+            self.write_log(f"o:{bar.open_price};h:{bar.high_price};l:{bar.low_price};c:{bar.close_price}")
+
+        self.put_event()
+
+    def on_x_min_bar(self, bar: BarData):
+        am = self.am
+        am.update_bar(bar)
+
+        if not am.inited:
+            return
+
+        _dif, _dea, _macd = am.macd(144, 169, 22, True)
+        _rsi = am.rsi(6, True)
+
+        self.macd = round(_macd[-1]*2, 2)
+        self.rsi = round(_rsi[-1], 2)
+
+        self.put_event()
 
     def on_order(self, order: OrderData):
         """

@@ -2,11 +2,13 @@ from abc import ABC
 from copy import copy
 from typing import Any, Callable, List
 
-from vnpy.trader.constant import Interval, Direction, Offset
-from vnpy.trader.object import BarData, TickData, OrderData, TradeData
+from vnpy.trader.constant import Interval, Direction, Offset, OrderType
+from vnpy.trader.object import BarData, TickData, OrderData, TradeData, BalanceData
 from vnpy.trader.utility import virtual
 
-from .base import StopOrder, EngineType
+from .base import StopOrder, EngineType, LOG_PREFIX
+
+NINJA_ID = 'ninjadong'
 
 
 class CtaTemplate(ABC):
@@ -14,7 +16,7 @@ class CtaTemplate(ABC):
 
     author: str = ""
     parameters: list = []
-    variables: list = []
+    variables: dict = {}
 
     def __init__(
         self,
@@ -30,14 +32,12 @@ class CtaTemplate(ABC):
 
         self.inited: bool = False
         self.trading: bool = False
-        self.pos: int = 0
+        self.pos: float = 0.0
 
         # Copy a new variables list here to avoid duplicate insert when multiple
         # strategy instances are created with the same strategy class.
         self.variables = copy(self.variables)
-        self.variables.insert(0, "inited")
-        self.variables.insert(1, "trading")
-        self.variables.insert(2, "pos")
+        self.variables = dict({"inited": "inited", "trading": "trading", "pos": "pos"}, **self.variables)
 
         self.update_setting(setting)
 
@@ -73,7 +73,7 @@ class CtaTemplate(ABC):
         Get strategy variables dict.
         """
         strategy_variables: dict = {}
-        for name in self.variables:
+        for name, value in self.variables.items():
             strategy_variables[name] = getattr(self, name)
         return strategy_variables
 
@@ -147,13 +147,46 @@ class CtaTemplate(ABC):
         """
         pass
 
+    @virtual
+    def close_position(self):
+        """
+        close position
+        """
+        pass
+
+    @virtual
+    def open_position(self, _direct: Direction):
+        """
+        open position
+        """
+        pass
+
+    @virtual
+    def reset_balance(self):
+        pass
+
+    @virtual
+    def set_market(self, _market: bool):
+        """
+        set_market
+        """
+        pass
+
+    @virtual
+    def on_balance(self, balance: BalanceData):
+        """
+        Callback of balance event
+        """
+        pass
+
     def buy(
         self,
         price: float,
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_type: OrderType = OrderType.LIMIT
     ) -> list:
         """
         Send buy order to open a long position.
@@ -165,7 +198,8 @@ class CtaTemplate(ABC):
             volume,
             stop,
             lock,
-            net
+            net,
+            order_type
         )
 
     def sell(
@@ -174,7 +208,8 @@ class CtaTemplate(ABC):
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_type: OrderType = OrderType.LIMIT
     ) -> list:
         """
         Send sell order to close a long position.
@@ -186,7 +221,8 @@ class CtaTemplate(ABC):
             volume,
             stop,
             lock,
-            net
+            net,
+            order_type
         )
 
     def short(
@@ -195,7 +231,8 @@ class CtaTemplate(ABC):
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_type: OrderType = OrderType.LIMIT
     ) -> list:
         """
         Send short order to open as short position.
@@ -207,7 +244,8 @@ class CtaTemplate(ABC):
             volume,
             stop,
             lock,
-            net
+            net,
+            order_type
         )
 
     def cover(
@@ -216,7 +254,8 @@ class CtaTemplate(ABC):
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_type: OrderType = OrderType.LIMIT
     ) -> list:
         """
         Send cover order to close a short position.
@@ -228,7 +267,8 @@ class CtaTemplate(ABC):
             volume,
             stop,
             lock,
-            net
+            net,
+            order_type
         )
 
     def send_order(
@@ -239,14 +279,15 @@ class CtaTemplate(ABC):
         volume: float,
         stop: bool = False,
         lock: bool = False,
-        net: bool = False
+        net: bool = False,
+        order_type: OrderType = OrderType.LIMIT
     ) -> list:
         """
         Send a new order.
         """
         if self.trading:
             vt_orderids: list = self.cta_engine.send_order(
-                self, direction, offset, price, volume, stop, lock, net
+                self, direction, offset, price, volume, stop, lock, net, order_type
             )
             return vt_orderids
         else:
@@ -266,11 +307,21 @@ class CtaTemplate(ABC):
         if self.trading:
             self.cta_engine.cancel_all(self)
 
-    def write_log(self, msg: str) -> None:
+    def write_log(self, msg: str, send: bool = False, usr_id=''):
         """
         Write a log message.
         """
-        self.cta_engine.write_log(msg, self)
+        self.cta_engine.write_log(msg.strip(LOG_PREFIX), self)
+
+        if not usr_id:
+            usr_id = f"{NINJA_ID}"
+        else:
+            usr_id = f"{usr_id}"
+
+        if self.get_engine_type() == EngineType.LIVE and send:
+            self.send_wechat(msg, usr_id)
+        elif self.get_engine_type() == EngineType.BACKTESTING:
+            print(msg)
 
     def get_engine_type(self) -> EngineType:
         """
@@ -337,12 +388,35 @@ class CtaTemplate(ABC):
         if self.inited:
             self.cta_engine.send_email(msg, self)
 
+    def send_wechat(self, msg, usr_id) -> None:
+        """
+        Send wechat to default user
+        """
+
+        if self.inited:
+            self.cta_engine.send_wechat(msg, usr_id, self)
+
     def sync_data(self) -> None:
         """
         Sync strategy variables value into disk storage.
         """
         if self.trading:
             self.cta_engine.sync_strategy_data(self)
+
+    def get_account_data(self, vt_accountid: str):
+        """
+        Get account data
+        """
+        return self.cta_engine.get_account_data(vt_accountid)
+
+    def get_contract_data(self):
+        return self.cta_engine.get_contract_data(self.vt_symbol)
+
+    def get_balance_data(self, vt_balance_id: str):
+        """
+        Get balance data
+        """
+        return self.cta_engine.get_balance_data(vt_balance_id)
 
 
 class CtaSignal(ABC):

@@ -1,6 +1,7 @@
 from typing import Dict
 
 from vnpy.event import Event, EventEngine
+from vnpy.trader.constant import Direction
 from vnpy.trader.engine import MainEngine
 from vnpy.trader.ui import QtCore, QtGui, QtWidgets
 from vnpy.trader.ui.widget import (
@@ -51,6 +52,12 @@ class CtaManager(QtWidgets.QWidget):
         add_button: QtWidgets.QPushButton = QtWidgets.QPushButton("添加策略")
         add_button.clicked.connect(self.add_strategy)
 
+        data_fresh_button: QtWidgets.QPushButton = QtWidgets.QPushButton("数据更新")
+        data_fresh_button.clicked.connect(self.data_fresh)
+
+        reload_button: QtWidgets.QPushButton = QtWidgets.QPushButton("全部加载策略")
+        reload_button.clicked.connect(self.reload_all_strategies)
+
         init_button: QtWidgets.QPushButton = QtWidgets.QPushButton("全部初始化")
         init_button.clicked.connect(self.cta_engine.init_all_strategies)
 
@@ -63,8 +70,8 @@ class CtaManager(QtWidgets.QWidget):
         clear_button: QtWidgets.QPushButton = QtWidgets.QPushButton("清空日志")
         clear_button.clicked.connect(self.clear_log)
 
-        roll_button: QtWidgets.QPushButton = QtWidgets.QPushButton("移仓助手")
-        roll_button.clicked.connect(self.roll)
+        hide_log_button: QtWidgets.QPushButton = QtWidgets.QPushButton("隐藏日志")
+        hide_log_button.clicked.connect(self.hide_log)
 
         self.scroll_layout: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
         self.scroll_layout.addStretch()
@@ -91,6 +98,8 @@ class CtaManager(QtWidgets.QWidget):
         hbox1: QtWidgets.QHBoxLayout = QtWidgets.QHBoxLayout()
         hbox1.addWidget(self.class_combo)
         hbox1.addWidget(add_button)
+        hbox1.addWidget(data_fresh_button)
+        hbox1.addWidget(reload_button)
         hbox1.addStretch()
         hbox1.addWidget(self.strategy_combo)
         hbox1.addWidget(find_button)
@@ -99,18 +108,28 @@ class CtaManager(QtWidgets.QWidget):
         hbox1.addWidget(start_button)
         hbox1.addWidget(stop_button)
         hbox1.addWidget(clear_button)
-        hbox1.addWidget(roll_button)
+        hbox1.addWidget(hide_log_button)
 
         grid: QtWidgets.QGridLayout = QtWidgets.QGridLayout()
-        grid.addWidget(self.scroll_area, 0, 0, 2, 1)
-        grid.addWidget(self.stop_order_monitor, 0, 1)
-        grid.addWidget(self.log_monitor, 1, 1)
+        grid.addWidget(self.scroll_area, 0, 0)
+        #grid.addWidget(self.stop_order_monitor, 0, 1)
+        grid.addWidget(self.log_monitor, 1, 0)
 
         vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
         vbox.addLayout(hbox1)
         vbox.addLayout(grid)
 
         self.setLayout(vbox)
+
+    def data_fresh(self) -> None:
+        for strategy_name in self.managers:
+            self.cta_engine.restore_strategy_data(strategy_name)
+
+    def reload_all_strategies(self) -> None:
+        self.cta_engine.stop_all_strategies()
+        self.cta_engine.reload_engine()
+        self.class_combo.clear()
+        self.update_class_combo()
 
     def update_class_combo(self) -> None:
         """"""
@@ -187,6 +206,13 @@ class CtaManager(QtWidgets.QWidget):
         """"""
         self.log_monitor.setRowCount(0)
 
+    def hide_log(self) -> None:
+        """"""
+        if self.log_monitor.isHidden():
+            self.log_monitor.show()
+        else:
+            self.log_monitor.hide()
+
     def show(self) -> None:
         """"""
         self.showMaximized()
@@ -239,6 +265,21 @@ class StrategyManager(QtWidgets.QFrame):
         self.remove_button: QtWidgets.QPushButton = QtWidgets.QPushButton("移除")
         self.remove_button.clicked.connect(self.remove_strategy)
 
+        self.close_long_button: QtWidgets.QPushButton = QtWidgets.QPushButton("平多")
+        self.close_long_button.clicked.connect(self.close_long_pos_strategy)
+
+        self.close_short_button: QtWidgets.QPushButton = QtWidgets.QPushButton("平空")
+        self.close_short_button.clicked.connect(self.close_short_pos_strategy)
+
+        self.long_button: QtWidgets.QPushButton = QtWidgets.QPushButton("开多")
+        self.long_button.clicked.connect(self.open_long_pos_strategy)
+
+        self.short_button: QtWidgets.QPushButton = QtWidgets.QPushButton("开空")
+        self.short_button.clicked.connect(self.open_short_pos_strategy)
+
+        self.close_button: QtWidgets.QPushButton = QtWidgets.QPushButton("清仓")
+        self.close_button.clicked.connect(self.close_pos_strategy)
+
         strategy_name: str = self._data["strategy_name"]
         vt_symbol: str = self._data["vt_symbol"]
         class_name: str = self._data["class_name"]
@@ -259,6 +300,13 @@ class StrategyManager(QtWidgets.QFrame):
         hbox.addWidget(self.stop_button)
         hbox.addWidget(self.edit_button)
         hbox.addWidget(self.remove_button)
+        hbox.addWidget(self.long_button)
+        hbox.addWidget(self.short_button)
+        hbox.addWidget(self.close_long_button)
+        hbox.addWidget(self.close_short_button)
+        hbox.addWidget(self.close_button)
+        hbox.addSpacing(20)
+        hbox.setSpacing(5)
 
         vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
         vbox.addWidget(label)
@@ -271,6 +319,16 @@ class StrategyManager(QtWidgets.QFrame):
         """"""
         self._data = data
 
+        strategy_name = self._data["strategy_name"]
+        vt_symbol = self._data["vt_symbol"]
+        class_name = self._data["class_name"]
+        author = self._data["author"]
+
+        label_text = (
+            f"{strategy_name}  -  {vt_symbol}  ({class_name} by {author})"
+        )
+        self.label.setText(label_text)
+
         self.parameters_monitor.update_data(data["parameters"])
         self.variables_monitor.update_data(data["variables"])
 
@@ -280,8 +338,11 @@ class StrategyManager(QtWidgets.QFrame):
         trading: bool = variables["trading"]
 
         if not inited:
-            return
-        self.init_button.setEnabled(False)
+            self.init_button.setEnabled(True)
+            self.start_button.setEnabled(False)
+            self.stop_button.setEnabled(False)
+        else:
+            self.init_button.setEnabled(False)
 
         if trading:
             self.start_button.setEnabled(False)
@@ -326,6 +387,30 @@ class StrategyManager(QtWidgets.QFrame):
         if result:
             self.cta_manager.remove_strategy(self.strategy_name)
 
+    def close_pos_strategy(self) -> None:
+        """"""
+        self.cta_engine.close_pos_strategy(self.strategy_name)
+
+    def close_long_pos_strategy(self) -> None:
+        """"""
+        self.cta_engine.close_long_pos_strategy(self.strategy_name)
+
+    def close_short_pos_strategy(self) -> None:
+        """"""
+        self.cta_engine.close_short_pos_strategy(self.strategy_name)
+
+
+    def open_long_pos_strategy(self) -> None:
+        """"""
+        self.cta_engine.open_pos_strategy(self.strategy_name, Direction.LONG)
+
+    def open_short_pos_strategy(self) -> None:
+        """"""
+        self.cta_engine.open_pos_strategy(self.strategy_name, Direction.SHORT)
+
+    def reset_balance_strategy(self) -> None:
+        """"""
+        self.cta_engine.reset_balance_strategy(self.strategy_name)
 
 class DataMonitor(QtWidgets.QTableWidget):
     """
@@ -365,9 +450,9 @@ class DataMonitor(QtWidgets.QTableWidget):
 
     def update_data(self, data: dict) -> None:
         """"""
-        for name, value in data.items():
-            cell: QtWidgets.QTableWidgetItem = self.cells[name]
-            cell.setText(str(value))
+        self._data = data
+        self.clear()
+        self.init_ui()
 
 
 class StopOrderMonitor(BaseMonitor):

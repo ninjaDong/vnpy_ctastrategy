@@ -14,10 +14,18 @@ from vnpy.trader.constant import (
     Offset,
     Exchange,
     Interval,
-    Status
+    Status,
+    OrderType
 )
 from vnpy.trader.database import get_database, BaseDatabase
-from vnpy.trader.object import OrderData, TradeData, BarData, TickData
+from vnpy.trader.object import (
+    OrderData,
+    TradeData,
+    BarData,
+    TickData,
+    ContractData,
+    AccountData
+)
 from vnpy.trader.utility import round_to, extract_vt_symbol
 from vnpy.trader.optimize import (
     OptimizationSetting,
@@ -55,9 +63,10 @@ class BacktestingEngine:
         self.size: float = 1
         self.pricetick: float = 0
         self.capital: int = 1_000_000
-        self.risk_free: float = 0
-        self.annual_days: int = 240
+        self.risk_free: float = 0.02
+        self.annual_days: int = 365
         self.mode: BacktestingMode = BacktestingMode.BAR
+        self.inverse = False
 
         self.strategy_class: Type[CtaTemplate] = None
         self.strategy: CtaTemplate = None
@@ -121,9 +130,10 @@ class BacktestingEngine:
         capital: int = 0,
         end: datetime = None,
         mode: BacktestingMode = BacktestingMode.BAR,
+        inverse: bool = False,
         risk_free: float = 0,
-        annual_days: int = 240
-    ) -> None:
+        annual_days: int = 365
+    ):
         """"""
         self.mode = mode
         self.vt_symbol = vt_symbol
@@ -144,6 +154,7 @@ class BacktestingEngine:
         self.end = end.replace(hour=23, minute=59, second=59)
 
         self.mode = mode
+        self.inverse = inverse
         self.risk_free = risk_free
         self.annual_days = annual_days
 
@@ -268,7 +279,8 @@ class BacktestingEngine:
                 start_pos,
                 self.size,
                 self.rate,
-                self.slippage
+                self.slippage,
+                self.inverse
             )
 
             pre_close = daily_result.close_price
@@ -636,8 +648,9 @@ class BacktestingEngine:
                 and short_cross_price > 0
             )
 
-            if not long_cross and not short_cross:
-                continue
+            if order.type == OrderType.LIMIT:
+                if not long_cross and not short_cross:
+                    continue
 
             # Push order udpate with status "all traded" (filled).
             order.traded = order.volume
@@ -650,12 +663,20 @@ class BacktestingEngine:
             # Push trade update
             self.trade_count += 1
 
-            if long_cross:
-                trade_price = min(order.price, long_best_price)
-                pos_change = order.volume
+            if order.type == OrderType.MARKET:
+                if order.direction == Direction.LONG:
+                    trade_price = long_best_price
+                    pos_change = order.volume
+                else:
+                    trade_price = short_best_price
+                    pos_change = -order.volume
             else:
-                trade_price = max(order.price, short_best_price)
-                pos_change = -order.volume
+                if long_cross:
+                    trade_price = min(order.price, long_best_price)
+                    pos_change = order.volume
+                else:
+                    trade_price = max(order.price, short_best_price)
+                    pos_change = -order.volume
 
             trade: TradeData = TradeData(
                 symbol=order.symbol,
@@ -694,12 +715,12 @@ class BacktestingEngine:
             # Check whether stop order can be triggered.
             long_cross: bool = (
                 stop_order.direction == Direction.LONG
-                and stop_order.price <= long_cross_price
+                and short_cross_price <= stop_order.price <= long_cross_price
             )
 
             short_cross: bool = (
                 stop_order.direction == Direction.SHORT
-                and stop_order.price >= short_cross_price
+                and long_cross_price >= stop_order.price >= short_cross_price
             )
 
             if not long_cross and not short_cross:
@@ -822,14 +843,15 @@ class BacktestingEngine:
         volume: float,
         stop: bool,
         lock: bool,
-        net: bool
+        net: bool,
+        order_type: OrderType
     ) -> list:
         """"""
         price: float = round_to(price, self.pricetick)
         if stop:
             vt_orderid: str = self.send_stop_order(direction, offset, price, volume)
         else:
-            vt_orderid: str = self.send_limit_order(direction, offset, price, volume)
+            vt_orderid: str = self.send_limit_order(direction, offset, price, volume, order_type)
         return [vt_orderid]
 
     def send_stop_order(
@@ -863,7 +885,8 @@ class BacktestingEngine:
         direction: Direction,
         offset: Offset,
         price: float,
-        volume: float
+        volume: float,
+        order_type: OrderType
     ) -> str:
         """"""
         self.limit_order_count += 1
@@ -872,6 +895,7 @@ class BacktestingEngine:
             symbol=self.symbol,
             exchange=self.exchange,
             orderid=str(self.limit_order_count),
+            type= order_type,
             direction=direction,
             offset=offset,
             price=price,
@@ -938,6 +962,13 @@ class BacktestingEngine:
         """
         pass
 
+    def get_account_data(self,vt_accountid):
+        """"""
+        account = AccountData("","")
+        account.balance = self.capital
+        account.frozen = 0
+        return account
+
     def sync_strategy_data(self, strategy: CtaTemplate) -> None:
         """
         Sync strategy data into json file.
@@ -955,6 +986,20 @@ class BacktestingEngine:
         Return contract pricetick data.
         """
         return self.pricetick
+
+    def get_contract_data(self, strategy: CtaTemplate):
+        contract = ContractData(
+            symbol="",
+            exchange=self.exchange,
+            name="",
+            product="",
+            gateway_name="",
+            pricetick=self.pricetick,
+            size=self.size,
+            inverse= self.inverse
+        )
+
+        return contract
 
     def get_size(self, strategy: CtaTemplate) -> int:
         """
@@ -1027,7 +1072,8 @@ class DailyResult:
         start_pos: float,
         size: int,
         rate: float,
-        slippage: float
+        slippage: float,
+        inverse: bool
     ) -> None:
         """"""
         # If no pre_close provided on the first day,
@@ -1041,7 +1087,12 @@ class DailyResult:
         self.start_pos = start_pos
         self.end_pos = start_pos
 
-        self.holding_pnl = self.start_pos * (self.close_price - self.pre_close) * size
+        if not inverse:     # For normal contract
+            self.holding_pnl = self.start_pos * \
+                (self.close_price - self.pre_close) * size
+        else:               # For crypto currency inverse contract
+            self.holding_pnl = self.start_pos * \
+                (1 / self.pre_close - 1 / self.close_price) * size
 
         # Trading pnl is the pnl from new trade during the day
         self.trade_count = len(self.trades)
@@ -1054,10 +1105,18 @@ class DailyResult:
 
             self.end_pos += pos_change
 
-            turnover: float = trade.volume * size * trade.price
-            self.trading_pnl += pos_change * \
-                (self.close_price - trade.price) * size
-            self.slippage += trade.volume * size * slippage
+            # For normal contract
+            if not inverse:
+                turnover = trade.volume * size * trade.price
+                self.trading_pnl += pos_change * \
+                    (self.close_price - trade.price) * size
+                self.slippage += trade.volume * size * slippage
+            # For crypto currency inverse contract
+            else:
+                turnover = trade.volume * size / trade.price
+                self.trading_pnl += pos_change * \
+                    (1 / trade.price - 1 / self.close_price) * size
+                self.slippage += trade.volume * size * slippage / (trade.price ** 2)
 
             self.turnover += turnover
             self.commission += turnover * rate
@@ -1111,6 +1170,7 @@ def evaluate(
     capital: int,
     end: datetime,
     mode: BacktestingMode,
+    inverse: bool,
     setting: dict
 ) -> tuple:
     """
@@ -1128,7 +1188,8 @@ def evaluate(
         pricetick=pricetick,
         capital=capital,
         end=end,
-        mode=mode
+        mode=mode,
+        inverse=inverse
     )
 
     engine.add_strategy(strategy_class, setting)
@@ -1158,7 +1219,8 @@ def wrap_evaluate(engine: BacktestingEngine, target_name: str) -> callable:
         engine.pricetick,
         engine.capital,
         engine.end,
-        engine.mode
+        engine.mode,
+        engine.inverse
     )
     return func
 
