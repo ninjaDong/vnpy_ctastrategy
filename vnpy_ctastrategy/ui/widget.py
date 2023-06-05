@@ -239,6 +239,7 @@ class StrategyManager(QtWidgets.QFrame):
 
         self.strategy_name: str = data["strategy_name"]
         self._data: dict = data
+        self.label: QtWidgets.QLabel = None
 
         self.init_ui()
 
@@ -288,8 +289,8 @@ class StrategyManager(QtWidgets.QFrame):
         label_text: str = (
             f"{strategy_name}  -  {vt_symbol}  ({class_name} by {author})"
         )
-        label: QtWidgets.QLabel = QtWidgets.QLabel(label_text)
-        label.setAlignment(QtCore.Qt.AlignCenter)
+        self.label = QtWidgets.QLabel(label_text)
+        self.label.setAlignment(QtCore.Qt.AlignCenter)
 
         self.parameters_monitor: DataMonitor = DataMonitor(self._data["parameters"])
         self.variables_monitor: DataMonitor = DataMonitor(self._data["variables"])
@@ -309,7 +310,7 @@ class StrategyManager(QtWidgets.QFrame):
         hbox.setSpacing(5)
 
         vbox: QtWidgets.QVBoxLayout = QtWidgets.QVBoxLayout()
-        vbox.addWidget(label)
+        vbox.addWidget(self.label)
         vbox.addLayout(hbox)
         vbox.addWidget(self.parameters_monitor)
         vbox.addWidget(self.variables_monitor)
