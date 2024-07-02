@@ -794,6 +794,18 @@ class CtaEngine(BaseEngine):
         self.update_strategy_setting(strategy_name, setting)
         self.put_strategy_event(strategy)
 
+    def edit_strategy_variable(self, strategy_name: str, variables: dict):
+        """
+        Edit variables of a strategy
+        :param strategy_name:
+        :param variables:
+        :return:
+        """
+        strategy = self.strategies[strategy_name]
+        strategy.set_variables_attr(variables)
+
+        self.put_strategy_event(strategy)
+
     def remove_strategy(self, strategy_name: str) -> bool:
         """
         Remove a strategy.

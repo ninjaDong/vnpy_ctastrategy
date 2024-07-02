@@ -16,7 +16,7 @@ class CtaTemplate(ABC):
 
     author: str = ""
     parameters: list = []
-    variables: dict = {}
+    variables: list = []
 
     def __init__(
         self,
@@ -37,17 +37,24 @@ class CtaTemplate(ABC):
         # Copy a new variables list here to avoid duplicate insert when multiple
         # strategy instances are created with the same strategy class.
         self.variables = copy(self.variables)
-        self.variables = dict({"inited": "inited", "trading": "trading", "pos": "pos"}, **self.variables)
+        self.variables.insert(0, "inited")
+        self.variables.insert(1, "trading")
+        self.variables.insert(2, "pos")
 
         self.update_setting(setting)
 
-    def update_setting(self, setting: dict) -> None:
+    def update_setting(self, setting: dict):
         """
-        Update strategy parameter wtih value in setting dict.
+        Update strategy parameter with value in setting dict.
         """
-        for name in self.parameters:
-            if name in setting:
-                setattr(self, name, setting[name])
+        for key, value in setting.items():
+            if key in self.parameters:
+                setattr(self, key, value)
+
+    def set_variables_attr(self, setting: dict):
+        for key, value in setting.items():
+            if key in self.__class__.variables:
+                setattr(self, key, value)
 
     @classmethod
     def get_class_parameters(cls) -> dict:
@@ -73,7 +80,7 @@ class CtaTemplate(ABC):
         Get strategy variables dict.
         """
         strategy_variables: dict = {}
-        for name, value in self.variables.items():
+        for name in self.variables:
             strategy_variables[name] = getattr(self, name)
         return strategy_variables
 
