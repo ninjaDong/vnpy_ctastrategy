@@ -6,6 +6,7 @@ import traceback
 
 import numpy as np
 from pandas import DataFrame, Series
+from pandas.core.window import ExponentialMovingWindow
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -65,6 +66,7 @@ class BacktestingEngine:
         self.capital: int = 1_000_000
         self.risk_free: float = 0.02
         self.annual_days: int = 365
+        self.half_life: int = 183
         self.mode: BacktestingMode = BacktestingMode.BAR
         self.inverse = False
 
@@ -132,8 +134,9 @@ class BacktestingEngine:
         mode: BacktestingMode = BacktestingMode.BAR,
         inverse: bool = False,
         risk_free: float = 0,
-        annual_days: int = 365
-    ):
+        annual_days: int = 365,
+        half_life: int = 183
+    ) -> None:
         """"""
         self.mode = mode
         self.vt_symbol = vt_symbol
@@ -157,6 +160,7 @@ class BacktestingEngine:
         self.inverse = inverse
         self.risk_free = risk_free
         self.annual_days = annual_days
+        self.half_life = half_life
 
     def add_strategy(self, strategy_class: Type[CtaTemplate], setting: dict) -> None:
         """"""
@@ -260,8 +264,7 @@ class BacktestingEngine:
         self.output("开始计算逐日盯市盈亏")
 
         if not self.trades:
-            self.output("成交记录为空，无法计算")
-            return
+            self.output("回测成交记录为空")
 
         # Add trade data into daily reuslt.
         for trade in self.trades.values():
@@ -331,6 +334,7 @@ class BacktestingEngine:
         daily_return: float = 0
         return_std: float = 0
         sharpe_ratio: float = 0
+        ewm_sharpe: float = 0
         return_drawdown_ratio: float = 0
 
         # Check if balance is always positive
@@ -347,10 +351,7 @@ class BacktestingEngine:
             x[x <= 0] = np.nan
             df["return"] = np.log(x).fillna(0)
 
-            df["highlevel"] = (
-                df["balance"].rolling(
-                    min_periods=1, window=len(df), center=False).max()
-            )
+            df["highlevel"] = df["balance"].rolling(min_periods=1, window=len(df), center=False).max()
             df["drawdown"] = df["balance"] - df["highlevel"]
             df["ddpercent"] = df["drawdown"] / df["highlevel"] * 100
 
@@ -403,8 +404,14 @@ class BacktestingEngine:
             if return_std:
                 daily_risk_free: float = self.risk_free / np.sqrt(self.annual_days)
                 sharpe_ratio: float = (daily_return - daily_risk_free) / return_std * np.sqrt(self.annual_days)
+
+                ewm_window: ExponentialMovingWindow = df["return"].ewm(halflife=self.half_life)
+                ewm_mean: Series = ewm_window.mean() * 100
+                ewm_std: Series = ewm_window.std() * 100
+                ewm_sharpe: float = ((ewm_mean - daily_risk_free) / ewm_std)[-1] * np.sqrt(self.annual_days)
             else:
                 sharpe_ratio: float = 0
+                ewm_sharpe: float = 0
 
             if max_ddpercent:
                 return_drawdown_ratio: float = -total_return / max_ddpercent
@@ -445,6 +452,7 @@ class BacktestingEngine:
             self.output(f"日均收益率：\t{daily_return:,.2f}%")
             self.output(f"收益标准差：\t{return_std:,.2f}%")
             self.output(f"Sharpe Ratio：\t{sharpe_ratio:,.2f}")
+            self.output(f"EWM Sharpe：\t{ewm_sharpe:,.2f}")
             self.output(f"收益回撤比：\t{return_drawdown_ratio:,.2f}")
 
         statistics: dict = {
@@ -473,6 +481,7 @@ class BacktestingEngine:
             "daily_return": daily_return,
             "return_std": return_std,
             "sharpe_ratio": sharpe_ratio,
+            "ewm_sharpe": ewm_sharpe,
             "return_drawdown_ratio": return_drawdown_ratio,
         }
 
@@ -485,7 +494,8 @@ class BacktestingEngine:
         self.output("策略统计指标计算完成")
         return statistics
 
-    def show_chart(self, df: DataFrame = None) -> None:
+    # def show_chart(self, df: DataFrame = None) -> None:
+    def show_chart(self, df: DataFrame = None) -> go.Figure:
         """"""
         # Check DataFrame input exterior
         if df is None:
@@ -526,7 +536,7 @@ class BacktestingEngine:
         fig.add_trace(pnl_histogram, row=4, col=1)
 
         fig.update_layout(height=1000, width=1000)
-        fig.show()
+        return fig
 
     def run_bf_optimization(
         self,
@@ -560,7 +570,8 @@ class BacktestingEngine:
         self,
         optimization_setting: OptimizationSetting,
         output: bool = True,
-        max_workers: int = None
+        max_workers: int = None,
+        ngen_size: int = 30
     ) -> list:
         """"""
         if not check_optimization_setting(optimization_setting):
@@ -572,6 +583,7 @@ class BacktestingEngine:
             optimization_setting,
             get_target_value,
             max_workers=max_workers,
+            ngen_size=ngen_size,
             output=self.output
         )
 
@@ -808,9 +820,6 @@ class BacktestingEngine:
             init_end
         )
 
-        for bar in bars:
-            callback(bar)
-
         return bars
 
     def load_tick(self, vt_symbol: str, days: int, callback: Callable) -> List[TickData]:
@@ -828,9 +837,6 @@ class BacktestingEngine:
             init_start,
             init_end
         )
-
-        for tick in ticks:
-            callback(tick)
 
         return ticks
 
